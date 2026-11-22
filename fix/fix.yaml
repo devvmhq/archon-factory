@@ -2,8 +2,8 @@ name: fix
 description: >-
   Fix one dex task's bug: write a test that reproduces it and fails, fix it,
   adversarial review until SHIP (at most 2 rounds), the mise gate, then one
-  commit fast-forwarded onto local main. Never pushes. Start it with
-  `factory fix <dex-id>`.
+  commit fast-forwarded onto local main. Never pushes. Start it with the pack's
+  bin/factory: `factory fix <dex-id>`.
 provider: claude
 model: sonnet
 worktree:
@@ -13,16 +13,14 @@ inputs:
     required: true
     description: The dex task ID to fix.
 
+# The non-AI steps all run scripts/factory.ts (.shared/factory.ts), naming the
+# step and the lane to record; an empty lane leaves it as it is.
 nodes:
   # Lane: reproduce.
   - id: task
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_check_id "$INPUTS_TASK"
-      factory_prepare "$ARTIFACTS_DIR"
-      factory_dex start "$INPUTS_TASK" --force >/dev/null
-      factory_lane "$INPUTS_TASK" reproduce "$WORKFLOW_ID"
-      factory_dex show "$INPUTS_TASK" --json
+    script: factory
+    runtime: bun
+    with: { step: start, task: $INPUTS.task, lane: reproduce }
 
   - id: reproduce
     depends_on: [task]
@@ -30,16 +28,16 @@ nodes:
 
   - id: red
     depends_on: [reproduce]
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_red "$ARTIFACTS_DIR"
+    script: factory
+    runtime: bun
+    with: { step: red, task: $INPUTS.task, lane: "" }
 
   # Lane: build.
   - id: lane-build
     depends_on: [red]
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_lane "$INPUTS_TASK" build "$WORKFLOW_ID"
+    script: factory
+    runtime: bun
+    with: { step: lane, task: $INPUTS.task, lane: build }
 
   - id: fix
     depends_on: [lane-build]
@@ -56,10 +54,9 @@ nodes:
       until_bash: 'ship=$review.output.ship; [ "$ship" = true ]'
       nodes:
         - id: diff
-          bash: |
-            source "$HOME/.archon/scripts/factory/lib.sh"
-            factory_lane "$INPUTS_TASK" review "$WORKFLOW_ID"
-            factory_diff "$ARTIFACTS_DIR"
+          script: factory
+          runtime: bun
+          with: { step: diff, task: $INPUTS.task, lane: review }
 
         - id: review
           depends_on: [diff]
@@ -96,21 +93,21 @@ nodes:
           depends_on: [review, fix-findings]
           trigger_rule: none_failed_min_one_success
           bash: |
-            printf '%s\n' $review.output
+            verdict=$review.output
+            printf '%s\n' "$verdict"
 
-  # Lane: gate, then done.
+  # Lane: gate, then done (the commit step records it once the commit is in).
   - id: gate
     depends_on: [review-loop]
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_lane "$INPUTS_TASK" gate "$WORKFLOW_ID"
-      factory_gate
+    script: factory
+    runtime: bun
+    with: { step: gate, task: $INPUTS.task, lane: gate }
 
   - id: final-diff
     depends_on: [gate]
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_diff "$ARTIFACTS_DIR"
+    script: factory
+    runtime: bun
+    with: { step: diff, task: $INPUTS.task, lane: "" }
 
   - id: commit-message
     depends_on: [final-diff]
@@ -119,6 +116,6 @@ nodes:
 
   - id: commit
     depends_on: [commit-message]
-    bash: |
-      source "$HOME/.archon/scripts/factory/lib.sh"
-      factory_commit "$INPUTS_TASK" "$WORKFLOW_ID" "$ARTIFACTS_DIR"
+    script: factory
+    runtime: bun
+    with: { step: commit, task: $INPUTS.task, lane: "" }
