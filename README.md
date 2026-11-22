@@ -29,7 +29,7 @@ The merge commit keeps the main branch's first-parent history passing the gate a
 
 Each round's reviewer also gets the branch's commit messages, so it sees every earlier round's findings and the answers to them. It checks that those are really fixed before looking further, doesn't raise an answered finding again unless the answer is wrong, and rates as major only problems on input the project really sees (what its README, AGENTS.md, the task and its recorded fixtures describe). Possible-but-undescribed input is minor, and left to you.
 
-**`review`** continues a `feature` or `fix` run whose review hit its cap. It adopts that run's branch in a new run (`archon workflow run --adopt`), so it uses the pack as it is now, and runs up to 3 more review rounds, the gate, your review and the landing merge, like the end of `feature`.
+**`review`** continues a `feature` or `fix` run whose review hit its cap. It adopts that run's branch in a new run (`archon workflow run --adopt`) and runs up to 3 more review rounds, the gate, your review and the landing merge, like the end of `feature`. An adopted run reads project workflows from the adopted branch, whose vendored copy may predate `review`, so `factory review` runs the installed pack's `devvmhq/archon-factory:review`; the pack must be installed with `archon plugin add`.
 
 **`fix`** fixes a bug the same way, without the design step or your approvals. It writes a test that reproduces the bug and checks that it fails, fixes the bug, runs at most 2 review rounds and passes the gate, committing each step, then lands the branch with a merge commit.
 
