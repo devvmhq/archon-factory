@@ -126,13 +126,12 @@ nodes:
 
         # The group's output is its terminal nodes' output, and fix is skipped
         # when the reviewer ships, so this node always gives the verdict.
+        # Archon substitutes $review.output into bash already shell-quoted.
         - id: verdict
           depends_on: [review, fix]
           trigger_rule: none_failed_min_one_success
           bash: |
-            cat <<'FACTORY_REVIEW_END'
-            $review.output
-            FACTORY_REVIEW_END
+            printf '%s\n' $review.output
 
   # Lane: gate.
   - id: gate
