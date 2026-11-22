@@ -1,0 +1,195 @@
+name: feature
+description: >-
+  Build one dex task as a feature: design, your approval, failing tests first,
+  implement, self-review, adversarial review until SHIP (at most 3 rounds), the
+  mise gate, your review, then one commit fast-forwarded onto local main.
+  Never pushes. Start it with `factory feature <dex-id>`.
+provider: claude
+model: sonnet
+worktree:
+  enabled: true
+inputs:
+  task:
+    required: true
+    description: The dex task ID to build.
+
+nodes:
+  # Lane: design. Prints the task as JSON for the prompts.
+  - id: task
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_check_id "$INPUTS_TASK"
+      factory_prepare "$ARTIFACTS_DIR"
+      factory_dex start "$INPUTS_TASK" --force >/dev/null
+      factory_lane "$INPUTS_TASK" design "$WORKFLOW_ID"
+      factory_dex show "$INPUTS_TASK" --json
+
+  - id: design
+    depends_on: [task]
+    command: factory-design
+    model: opus
+    allowed_tools: [Read, Grep, Glob]
+
+  - id: lane-design-approval
+    depends_on: [design]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" design-approval "$WORKFLOW_ID"
+
+  - id: approve-design
+    depends_on: [lane-design-approval]
+    wait:
+      form: approval
+      attention: |
+        Design for dex task $INPUTS.task. Approve to start building (your
+        comment is passed to the builder), or reject with a reason.
+
+        $design.output
+
+  - id: design-rejected
+    depends_on: [approve-design]
+    when: "$approve-design.output.decision == 'reject'"
+    cancel: The design was rejected.
+
+  # Lane: build.
+  - id: lane-build
+    depends_on: [approve-design]
+    when: "$approve-design.output.decision == 'approve'"
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" build "$WORKFLOW_ID"
+
+  - id: tests
+    depends_on: [lane-build]
+    command: factory-write-tests
+
+  - id: red
+    depends_on: [tests]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_red "$ARTIFACTS_DIR"
+
+  - id: implement
+    depends_on: [red]
+    command: factory-implement
+    context:
+      resume: tests
+
+  - id: self-review
+    depends_on: [implement]
+    command: factory-self-review
+    context:
+      resume: implement
+
+  # Lane: review. A fresh reviewer each round, without write tools; a fixer
+  # acts on its findings. Reaching the cap fails the run for a human to judge.
+  - id: review-loop
+    depends_on: [self-review]
+    loop_group:
+      max_iterations: 3
+      fresh_context: true
+      until_bash: 'ship=$review.output.ship; [ "$ship" = true ]'
+      nodes:
+        - id: diff
+          bash: |
+            source "$HOME/.archon/scripts/factory/lib.sh"
+            factory_lane "$INPUTS_TASK" review "$WORKFLOW_ID"
+            factory_diff "$ARTIFACTS_DIR"
+
+        - id: review
+          depends_on: [diff]
+          command: factory-adversarial-review
+          model: opus
+          allowed_tools: [Read, Grep, Glob]
+          output_format:
+            type: object
+            properties:
+              ship: { type: boolean }
+              summary: { type: string }
+              findings:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    file: { type: string }
+                    line: { type: integer }
+                    severity: { type: string, enum: [blocker, major, minor] }
+                    problem: { type: string }
+                    fix: { type: string }
+                  required: [file, severity, problem, fix]
+            required: [ship, summary, findings]
+
+        - id: fix
+          depends_on: [review]
+          when: "$review.output.ship != true"
+          command: factory-fix-findings
+
+        # The group's output is its terminal nodes' output, and fix is skipped
+        # when the reviewer ships, so this node always gives the verdict.
+        - id: verdict
+          depends_on: [review, fix]
+          trigger_rule: none_failed_min_one_success
+          bash: |
+            cat <<'FACTORY_REVIEW_END'
+            $review.output
+            FACTORY_REVIEW_END
+
+  # Lane: gate.
+  - id: gate
+    depends_on: [review-loop]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" gate "$WORKFLOW_ID"
+      factory_gate
+
+  # The diff as it will be committed (the gate's fmt may have changed it).
+  - id: final-diff
+    depends_on: [gate]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_diff "$ARTIFACTS_DIR"
+
+  - id: commit-message
+    depends_on: [final-diff]
+    command: factory-commit-message
+    allowed_tools: [Read, Grep, Glob, Write]
+
+  # Lane: human-review.
+  - id: summary
+    depends_on: [commit-message]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" human-review "$WORKFLOW_ID"
+      echo "Worktree: $PWD"
+      factory_diff "$ARTIFACTS_DIR" --stat
+
+  - id: approve-final
+    depends_on: [summary]
+    wait:
+      form: approval
+      attention: |
+        Dex task $INPUTS.task passed the gate and is ready for your review.
+        Approve to commit it and fast-forward local main (nothing is pushed),
+        or reject with a reason to stop here and keep the worktree.
+
+        Commit message:
+
+        $commit-message.output
+
+        $summary.output
+
+        Last adversarial review:
+        $review-loop.output
+
+  - id: final-rejected
+    depends_on: [approve-final]
+    when: "$approve-final.output.decision == 'reject'"
+    cancel: The change was rejected at the final review.
+
+  # Lane: done.
+  - id: commit
+    depends_on: [approve-final]
+    when: "$approve-final.output.decision == 'approve'"
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_commit "$INPUTS_TASK" "$WORKFLOW_ID" "$ARTIFACTS_DIR"

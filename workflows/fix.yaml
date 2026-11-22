@@ -1,0 +1,125 @@
+name: fix
+description: >-
+  Fix one dex task's bug: write a test that reproduces it and fails, fix it,
+  adversarial review until SHIP (at most 2 rounds), the mise gate, then one
+  commit fast-forwarded onto local main. Never pushes. Start it with
+  `factory fix <dex-id>`.
+provider: claude
+model: sonnet
+worktree:
+  enabled: true
+inputs:
+  task:
+    required: true
+    description: The dex task ID to fix.
+
+nodes:
+  # Lane: reproduce.
+  - id: task
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_check_id "$INPUTS_TASK"
+      factory_prepare "$ARTIFACTS_DIR"
+      factory_dex start "$INPUTS_TASK" --force >/dev/null
+      factory_lane "$INPUTS_TASK" reproduce "$WORKFLOW_ID"
+      factory_dex show "$INPUTS_TASK" --json
+
+  - id: reproduce
+    depends_on: [task]
+    command: factory-reproduce
+
+  - id: red
+    depends_on: [reproduce]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_red "$ARTIFACTS_DIR"
+
+  # Lane: build.
+  - id: lane-build
+    depends_on: [red]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" build "$WORKFLOW_ID"
+
+  - id: fix
+    depends_on: [lane-build]
+    command: factory-fix-bug
+    context:
+      resume: reproduce
+
+  # Lane: review.
+  - id: review-loop
+    depends_on: [fix]
+    loop_group:
+      max_iterations: 2
+      fresh_context: true
+      until_bash: 'ship=$review.output.ship; [ "$ship" = true ]'
+      nodes:
+        - id: diff
+          bash: |
+            source "$HOME/.archon/scripts/factory/lib.sh"
+            factory_lane "$INPUTS_TASK" review "$WORKFLOW_ID"
+            factory_diff "$ARTIFACTS_DIR"
+
+        - id: review
+          depends_on: [diff]
+          command: factory-adversarial-review
+          model: opus
+          allowed_tools: [Read, Grep, Glob]
+          output_format:
+            type: object
+            properties:
+              ship: { type: boolean }
+              summary: { type: string }
+              findings:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    file: { type: string }
+                    line: { type: integer }
+                    severity: { type: string, enum: [blocker, major, minor] }
+                    problem: { type: string }
+                    fix: { type: string }
+                  required: [file, severity, problem, fix]
+            required: [ship, summary, findings]
+
+        - id: fix-findings
+          depends_on: [review]
+          when: "$review.output.ship != true"
+          command: factory-fix-findings
+
+        # The group's output is its terminal nodes' output, and fix-findings is
+        # skipped when the reviewer ships, so this node always gives the verdict.
+        - id: verdict
+          depends_on: [review, fix-findings]
+          trigger_rule: none_failed_min_one_success
+          bash: |
+            cat <<'FACTORY_REVIEW_END'
+            $review.output
+            FACTORY_REVIEW_END
+
+  # Lane: gate, then done.
+  - id: gate
+    depends_on: [review-loop]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_lane "$INPUTS_TASK" gate "$WORKFLOW_ID"
+      factory_gate
+
+  - id: final-diff
+    depends_on: [gate]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_diff "$ARTIFACTS_DIR"
+
+  - id: commit-message
+    depends_on: [final-diff]
+    command: factory-commit-message
+    allowed_tools: [Read, Grep, Glob, Write]
+
+  - id: commit
+    depends_on: [commit-message]
+    bash: |
+      source "$HOME/.archon/scripts/factory/lib.sh"
+      factory_commit "$INPUTS_TASK" "$WORKFLOW_ID" "$ARTIFACTS_DIR"
