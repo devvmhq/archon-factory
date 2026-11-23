@@ -75,6 +75,9 @@ describe("pickedTasks", () => {
 describe("inferenceNote", () => {
   test("says none, flags an inference, or flags a missing section", () => {
     expect(inferenceNote("## Inference\nnone\n")).toBe("Inference: none.");
+    expect(inferenceNote("## Inference\n\n`none`\n\n## Behaviour\nx")).toBe("Inference: none.");
+    expect(inferenceNote("## Inference\n**None.**\n")).toBe("Inference: none.");
+    expect(inferenceNote("## Inference\n- none\n")).toBe("Inference: none.");
     expect(inferenceNote("## Inference\n- Steps are cut by timestamps.\n")).toContain("THIS DESIGN INFERS");
     expect(inferenceNote("## Acceptance cases\nAC-1: x\n")).toContain("has no \"## Inference\" section");
   });

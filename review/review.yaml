@@ -127,7 +127,7 @@ nodes:
   # Lane: polish. Runs after the loop, or after an approved stop; a rejected
   # one cancels the run first.
   - id: lane-polish
-    depends_on: [review-loop, redesign]
+    depends_on: [review-loop, redesign, redesign-rejected]
     trigger_rule: none_failed_min_one_success
     script: factory
     runtime: bun
