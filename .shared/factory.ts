@@ -384,9 +384,13 @@ export function inferenceNote(design: string): string {
 // tests commit, so every later step and an adopted review run read the same
 // spec, and the squash carries it to the pushed history.
 export function extractSpec(design: string, approval: string): string {
-  const cases = designSection(design, "Acceptance cases");
-  const nonGoals = designSection(design, "Non-goals");
-  const inference = designSection(design, "Inference");
+  // Each section becomes one paragraph (blank lines inside it dropped), so a
+  // squash, which keeps whole "Spec: …" paragraphs, carries all of it.
+  const tight = (s: string) => s.replace(/\n\s*\n/g, "\n");
+  const cases = tight(designSection(design, "Acceptance cases"));
+  const nonGoals = tight(designSection(design, "Non-goals"));
+  const inference = tight(designSection(design, "Inference"));
+  approval = tight(approval);
   if (cases === "") throw new Error('the approved design has no "## Acceptance cases" section');
   const parts = [`Spec: acceptance cases\n${cases}`, `Spec: non-goals\n${nonGoals === "" ? "(none stated)" : nonGoals}`];
   if (inference !== "") parts.push(`Spec: inference\n${inference}`);

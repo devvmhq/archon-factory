@@ -140,6 +140,13 @@ describe("extractSpec", () => {
     );
   });
 
+  test("keeps each section one paragraph, so a squash carries all of it", () => {
+    const spaced = "## Acceptance cases\n\nAC-1: a\n\nAC-2: b\n\n## Non-goals\n\n- c\n\n- d\n";
+    const spec = extractSpec(spaced, "Approved.\n\nWith a note.");
+    expect(spec).toBe("Spec: acceptance cases\nAC-1: a\nAC-2: b\n\nSpec: non-goals\n- c\n- d\n\nSpec: approved with\nApproved.\nWith a note.");
+    expect(specParagraphs(`test: x\n\n${spec}\n\nCo-Authored-By: S <s@e>`).join("\n\n")).toBe(spec);
+  });
+
   test("reads a section that ends the design", () => {
     expect(extractSpec("## Acceptance cases\nAC-1: y", "")).toBe("Spec: acceptance cases\nAC-1: y\n\nSpec: non-goals\n(none stated)");
   });
